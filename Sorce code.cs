@@ -9,45 +9,57 @@ namespace BuildRadiusCustomizer
     [BepInPlugin(PluginGUID, PluginName, PluginVersion)]
     public class BuildRadiusCustomizerPlugin : BaseUnityPlugin
     {
-        private const string PluginGUID = "com.Viking.valheim.buildradiuscustomizer";
+        private const string PluginGUID = "Viking.buildradiuscustomizer";
         private const string PluginName = "BuildRadiusCustomizer";
-        private const string PluginVersion = "1.1.0";
+        private const string PluginVersion = "1.2.0";
 
         private readonly Harmony harmony = new Harmony(PluginGUID);
 
         // Configuration Entries
-        public static ConfigEntry<float> WorkbenchRadius;
-        public static ConfigEntry<float> StonecutterRadius;
-        public static ConfigEntry<float> ForgeRadius;
-        public static ConfigEntry<float> BlackForgeRadius;
-        public static ConfigEntry<float> GaldrTableRadius;
+        public static ConfigEntry<bool> IsConfigLocked;
+        public static ConfigEntry<bool> ModEnabled;
+
+        private static ConfigEntry<float> _workbenchRadius;
+        private static ConfigEntry<float> _stonecutterRadius;
+        private static ConfigEntry<float> _forgeRadius;
+        private static ConfigEntry<float> _blackForgeRadius;
+        private static ConfigEntry<float> _galdrTableRadius;
+
+        // Smart Properties
+        public static float WorkbenchRadius => ModEnabled.Value ? _workbenchRadius.Value : 20f;
+        public static float StonecutterRadius => ModEnabled.Value ? _stonecutterRadius.Value : 20f;
+        public static float ForgeRadius => ModEnabled.Value ? _forgeRadius.Value : 20f;
+        public static float BlackForgeRadius => ModEnabled.Value ? _blackForgeRadius.Value : 20f;
+        public static float GaldrTableRadius => ModEnabled.Value ? _galdrTableRadius.Value : 20f;
 
         private void Awake()
         {
-            // Bind configs with settings changed listener for real-time updates
-            WorkbenchRadius = Config.Bind("1 - Radius Settings", "Workbench Radius", 20f, "Maximum building radius for the Workbench. (Vanilla default: 20)");
-            WorkbenchRadius.SettingChanged += OnSettingChanged;
+            // 0 - General Settings
+            IsConfigLocked = Config.Bind("0 - General", "Lock Configuration", true,
+                new ConfigDescription("If true, configuration settings will be locked to server-side values via ConditionalConfigSync for non-admin players.", null, new { order = 210 }));
 
-            StonecutterRadius = Config.Bind("1 - Radius Settings", "Stonecutter Radius", 20f, "Maximum building radius for the Stonecutter. (Vanilla default: 20)");
-            StonecutterRadius.SettingChanged += OnSettingChanged;
+            ModEnabled = BindConfig("0 - General", "Mod Enabled", true, "If false, all custom build radius adjustments are ignored and game default values are used. [Synced with Server]", 200);
 
-            ForgeRadius = Config.Bind("1 - Radius Settings", "Forge Radius", 20f, "Maximum building radius for the Forge. (Vanilla default: 20)");
-            ForgeRadius.SettingChanged += OnSettingChanged;
+            // 1 - Radius Settings
+            _workbenchRadius = BindConfig("1 - Radius Settings", "Workbench Radius", 20f, "Maximum building radius for the Workbench. (Vanilla default: 20) [Synced with Server]", 100);
+            _stonecutterRadius = BindConfig("1 - Radius Settings", "Stonecutter Radius", 20f, "Maximum building radius for the Stonecutter. (Vanilla default: 20) [Synced with Server]", 99);
+            _forgeRadius = BindConfig("1 - Radius Settings", "Forge Radius", 20f, "Maximum building radius for the Forge. (Vanilla default: 20) [Synced with Server]", 98);
+            _blackForgeRadius = BindConfig("1 - Radius Settings", "Black Forge Radius", 20f, "Maximum building radius for the Black Forge. (Vanilla default: 20) [Synced with Server]", 97);
+            _galdrTableRadius = BindConfig("1 - Radius Settings", "Galdr Table Radius", 20f, "Maximum building radius for the Galdr Table. (Vanilla default: 20) [Synced with Server]", 96);
 
-            BlackForgeRadius = Config.Bind("1 - Radius Settings", "Black Forge Radius", 20f, "Maximum building radius for the Black Forge. (Vanilla default: 20)");
-            BlackForgeRadius.SettingChanged += OnSettingChanged;
-
-            GaldrTableRadius = Config.Bind("1 - Radius Settings", "Galdr Table Radius", 20f, "Maximum building radius for the Galdr Table. (Vanilla default: 20)");
-            GaldrTableRadius.SettingChanged += OnSettingChanged;
-
-            // Apply patches
             harmony.PatchAll();
             Logger.LogInfo($"{PluginName} version {PluginVersion} loaded successfully.");
         }
 
+        private ConfigEntry<T> BindConfig<T>(string group, string name, T value, string description, int order)
+        {
+            ConfigEntry<T> configEntry = Config.Bind(group, name, value, new ConfigDescription(description, null, new { order }));
+            configEntry.SettingChanged += OnSettingChanged;
+            return configEntry;
+        }
+
         private void OnSettingChanged(object sender, EventArgs e)
         {
-            // Forces Valheim to update active station ranges in real-time
             UpdateActiveStationRanges();
         }
 
@@ -55,16 +67,16 @@ namespace BuildRadiusCustomizer
         {
             if (Player.m_localPlayer == null) return;
 
-            // Find all active pieces in loading distance and update live bounds
-            CraftingStation[] stations = FindObjectsOfType<CraftingStation>();
+            CraftingStation[] stations = FindObjectsByType<CraftingStation>(FindObjectsSortMode.None);
             foreach (CraftingStation station in stations)
             {
-                if (station.m_nview && station.m_nview.IsValid())
+                ZNetView nview = station.GetComponent<ZNetView>();
+                if (nview && nview.IsValid())
                 {
                     float targetRadius = GetTargetRadius(station.m_name);
                     if (targetRadius > 0f)
                     {
-                        station.m_range = targetRadius;
+                        station.m_rangeBuild = targetRadius;
                     }
                 }
             }
@@ -72,19 +84,18 @@ namespace BuildRadiusCustomizer
 
         public static float GetTargetRadius(string stationName)
         {
-            // Internal technical names for Valheim's building structures
             switch (stationName)
             {
                 case "$piece_workbench":
-                    return WorkbenchRadius.Value;
+                    return WorkbenchRadius;
                 case "$piece_stonecutter":
-                    return StonecutterRadius.Value;
+                    return StonecutterRadius;
                 case "$piece_forge":
-                    return ForgeRadius.Value;
+                    return ForgeRadius;
                 case "$piece_blackforge":
-                    return BlackForgeRadius.Value;
-                case "$piece_magictable": // Internal ID for Galdr Table
-                    return GaldrTableRadius.Value;
+                    return BlackForgeRadius;
+                case "$piece_magictable":
+                    return GaldrTableRadius;
                 default:
                     return -1f;
             }
@@ -96,17 +107,17 @@ namespace BuildRadiusCustomizer
         }
     }
 
-    // Harmony Patch to modify the radius when a station instantiates or loads into the simulation loop
-    [HarmonyPatch(typeof(CraftingStation), nameof(CraftingStation.Start))]
-    public static class CraftingStation_Start_Patch
+    [HarmonyPatch(typeof(CraftingStation), "Awake")]
+    public static class CraftingStation_Awake_Patch
     {
         public static void Postfix(CraftingStation __instance)
         {
             float targetRadius = BuildRadiusCustomizerPlugin.GetTargetRadius(__instance.m_name);
             if (targetRadius > 0f)
             {
-                __instance.m_range = targetRadius;
+                __instance.m_rangeBuild = targetRadius;
             }
         }
     }
 }
+
