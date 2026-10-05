@@ -12,6 +12,8 @@ A lightweight, completely dynamic utility that lets you customize the effective 
 * **Live Refresh System:** Change the radius on the fly using the configuration manager. The active build circles update instantly without needing to restart your game client.
 * **Independent Controls:** Configure the Workbench and Stonecutter ranges separately to fit your specific base-building setup.
 * **Uses ServerSync to lock settings and sync settings to all clients**
+* **Can increase spawn block radius to match bench range**
+* **Has optional spawn blocking chance setting**
 
 
 ⚙️ Requirements
