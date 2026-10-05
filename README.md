@@ -17,7 +17,6 @@ A lightweight, completely dynamic utility that lets you customize the effective 
 ⚙️ Requirements
 
 * **BepInEx pack for Valheim**
-* **ConditionalConfigSync**
 * **Official BepInEx Configuration Manager** (Highly recommended to gain access to the interactive UI sliders inside the game via the F1 or Pause hotkey).
 
 
