@@ -13,7 +13,7 @@ namespace BuildRadiusCustomizer
     {
         private const string PluginGUID = "Viking.buildradiuscustomizer";
         private const string PluginName = "BuildRadiusCustomizer";
-        private const string PluginVersion = "1.3.0";
+        private const string PluginVersion = "1.4.0";
 
         private readonly Harmony harmony = new Harmony(PluginGUID);
 
@@ -88,14 +88,12 @@ namespace BuildRadiusCustomizer
             Logger.LogInfo($"{PluginName} version {PluginVersion} loaded successfully.");
         }
 
-        // Modified BindConfig wrapper supporting AcceptableValueRange assignment
         private ConfigEntry<float> BindConfig(string group, string name, float value, string description, int order, float min, float max)
         {
             ConfigEntry<float> configEntry = Config.Bind(group, name, value,
                 new ConfigDescription(description, new AcceptableValueRange<float>(min, max), new { order }));
             configEntry.SettingChanged += OnSettingChanged;
 
-            // Register config item into ServerSync setup tracking loops
             SyncedConfigEntry<float> syncedEntry = ConfigSync.AddConfigEntry(configEntry);
             syncedEntry.SynchronizedConfig = true;
 
@@ -115,19 +113,24 @@ namespace BuildRadiusCustomizer
             CraftingStation[] stations = FindObjectsByType<CraftingStation>(FindObjectsSortMode.None);
             foreach (CraftingStation station in stations)
             {
-                ZNetView nview = station.GetComponent<ZNetView>();
-                if (nview && nview.IsValid())
+                ApplyStationRadius(station);
+            }
+        }
+
+        public static void ApplyStationRadius(CraftingStation station)
+        {
+            if (station == null) return;
+            ZNetView nview = station.GetComponent<ZNetView>();
+            if (nview && nview.IsValid())
+            {
+                float targetRadius = GetTargetRadius(station.m_name);
+                if (targetRadius > 0f)
                 {
-                    float targetRadius = GetTargetRadius(station.m_name);
-                    if (targetRadius > 0f)
-                    {
-                        station.m_rangeBuild = targetRadius;
-                    }
+                    station.m_rangeBuild = targetRadius;
                 }
             }
         }
 
-        // FIX: Gets the SphereCollider attached to the EffectArea GameObject to update its active range
         public static void UpdateSpawnBlockers()
         {
             if (Player.m_localPlayer == null) return;
@@ -135,13 +138,19 @@ namespace BuildRadiusCustomizer
             EffectArea[] effectAreas = FindObjectsByType<EffectArea>(FindObjectsSortMode.None);
             foreach (EffectArea area in effectAreas)
             {
-                if ((area.m_type & EffectArea.Type.PlayerBase) != 0)
+                ApplySpawnBlockerRadius(area);
+            }
+        }
+
+        public static void ApplySpawnBlockerRadius(EffectArea area)
+        {
+            if (area == null) return;
+            if (ModEnabled.Value && (area.m_type & EffectArea.Type.PlayerBase) != 0)
+            {
+                SphereCollider component = area.GetComponent<SphereCollider>();
+                if (component != null)
                 {
-                    SphereCollider component = area.GetComponent<SphereCollider>();
-                    if (component != null)
-                    {
-                        component.radius = BlockSpawnRadius;
-                    }
+                    component.radius = BlockSpawnRadius;
                 }
             }
         }
@@ -171,48 +180,58 @@ namespace BuildRadiusCustomizer
         }
     }
 
-    [HarmonyPatch(typeof(CraftingStation), "Awake")]
-    public static class CraftingStation_Awake_Patch
+    // FIX: Changed from Awake to Start. Start fires after initial vanilla overrides execute.
+    [HarmonyPatch(typeof(CraftingStation), "Start")]
+    public static class CraftingStation_Start_Patch
     {
         public static void Postfix(CraftingStation __instance)
         {
-            float targetRadius = BuildRadiusCustomizerPlugin.GetTargetRadius(__instance.m_name);
-            if (targetRadius > 0f)
-            {
-                __instance.m_rangeBuild = targetRadius;
-            }
+            BuildRadiusCustomizerPlugin.ApplyStationRadius(__instance);
         }
     }
 
-    // FIX: Targets the SphereCollider on instantiation instead of a non-existent field
+    // FIX: Using UpdateKnownStationsInRange forces continuous checks as players step into area grids
+    [HarmonyPatch(typeof(CraftingStation), "UpdateKnownStationsInRange")]
+    public static class CraftingStation_UpdateKnownStations_Patch
+    {
+        public static void Prefix(CraftingStation __instance)
+        {
+            BuildRadiusCustomizerPlugin.ApplyStationRadius(__instance);
+        }
+    }
+
     [HarmonyPatch(typeof(EffectArea), "Awake")]
     public static class EffectArea_Awake_Patch
     {
         public static void Postfix(EffectArea __instance)
         {
-            if (BuildRadiusCustomizerPlugin.ModEnabled.Value && (__instance.m_type & EffectArea.Type.PlayerBase) != 0)
-            {
-                SphereCollider component = __instance.GetComponent<SphereCollider>();
-                if (component != null)
-                {
-                    component.radius = BuildRadiusCustomizerPlugin.BlockSpawnRadius;
-                }
-            }
+            BuildRadiusCustomizerPlugin.ApplySpawnBlockerRadius(__instance);
         }
     }
 
-    // Safely targets Awake which is guaranteed to be a public, accessible method
+    // FIX: Overrides target area colliders continuously as streaming components refresh
+    [HarmonyPatch(typeof(EffectArea), "Update")]
+    public static class EffectArea_Update_Patch
+    {
+        private static float _timer = 0f;
+
+        public static void Postfix(EffectArea __instance)
+        {
+            _timer += Time.deltaTime;
+            if (_timer < 2.0f) return; // Only force recalculation every 2 seconds to maximize performance
+            _timer = 0f;
+
+            BuildRadiusCustomizerPlugin.ApplySpawnBlockerRadius(__instance);
+        }
+    }
+
     [HarmonyPatch(typeof(SpawnSystem), "Awake")]
     public static class SpawnSystem_Awake_Patch
     {
         public static void Postfix(SpawnSystem __instance)
         {
             float suppressionChance = BuildRadiusCustomizerPlugin.MobSpawnSuppression;
-
-            // If suppression configuration is completely turned off, leave things unchanged
             if (suppressionChance <= 0f || __instance.m_spawnLists == null) return;
-
-            // Step through the active spawning rule tables loaded on this game object zone component
             foreach (var spawnList in __instance.m_spawnLists)
             {
                 if (spawnList?.m_spawners == null) continue;
@@ -220,14 +239,12 @@ namespace BuildRadiusCustomizer
                 {
                     SpawnSystem.SpawnData spawnData = spawnList.m_spawners[i];
                     if (spawnData == null) continue;
-                    // If suppression is 100%, remove the configuration directly from the spawner block table
                     if (suppressionChance >= 1f)
                     {
                         spawnList.m_spawners.RemoveAt(i);
                     }
                     else
                     {
-                        // Dynamically decrease spawning performance chance relative to your slider position
                         spawnData.m_spawnChance = Mathf.Clamp(spawnData.m_spawnChance * (1f - suppressionChance), 0f, 100f);
                     }
                 }
